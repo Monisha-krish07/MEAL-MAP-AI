@@ -112,12 +112,14 @@ const Waveform = () => (
 export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onClose }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
+  const [status, setStatus] = useState<'Ready' | 'Listening' | 'Speaking' | 'Blocked' | 'Error'>('Ready');
   const [interimText, setInterimText] = useState('');
   const [inputText, setInputText] = useState('');
   const recognitionRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isListeningRef = useRef(false);
   const welcomedRef = useRef(false);
+  const [showActiveBanner, setShowActiveBanner] = useState(false);
 
   const addMessage = useCallback((msg: Message) => {
     setMessages(prev => [...prev, msg]);
@@ -125,11 +127,28 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
 
   const speak = useCallback((text: string, onEnd?: () => void) => {
     const synth = window.speechSynthesis;
+    if (!synth) return;
+    
     synth.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-IN';
     utterance.rate = 1.0;
-    if (onEnd) utterance.onend = onEnd;
+    
+    // Some browsers block speech until a user interaction occurs
+    utterance.onerror = (event) => {
+      console.error('SpeechSynthesis Error:', event);
+      if (event.error === 'not-allowed') {
+        setStatus('Blocked');
+        setShowActiveBanner(true);
+      }
+    };
+
+    utterance.onstart = () => setStatus('Speaking');
+    utterance.onend = () => {
+      setStatus('Ready');
+      if (onEnd) onEnd();
+    };
+    
     synth.speak(utterance);
   }, []);
 
@@ -153,12 +172,14 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
 
     // ── Native Capacitor (Android APK) ───────────────────────────────────
     if (isCapacitor()) {
+      setStatus('Listening');
       try {
         const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
 
         // Request mic permission
         const { speechRecognition } = await SpeechRecognition.requestPermissions();
         if (speechRecognition !== 'granted') {
+          setStatus('Error');
           addMessage({ text: 'Microphone permission is needed for voice input. Please allow it in Settings.', sender: 'ai' });
           return;
         }
@@ -177,6 +198,7 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
 
         isListeningRef.current = false;
         setIsListening(false);
+        setStatus('Ready');
 
         const transcript = result?.matches?.[0];
         if (transcript) {
@@ -185,6 +207,7 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
       } catch (err) {
         isListeningRef.current = false;
         setIsListening(false);
+        setStatus('Error');
         setInterimText('');
         addMessage({ text: "Couldn't start voice input. Please try again or type your order.", sender: 'ai' });
       }
@@ -194,6 +217,7 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
     // ── Browser Web Speech API (desktop / Chrome) ─────────────────────────
     const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) {
+      setStatus('Error');
       addMessage({ text: "Sorry, your browser doesn't support voice input. Try typing instead!", sender: 'ai' });
       return;
     }
@@ -207,6 +231,7 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
     recognition.onstart = () => {
       isListeningRef.current = true;
       setIsListening(true);
+      setStatus('Listening');
       setInterimText('');
     };
 
@@ -228,15 +253,21 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
       }
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error', event);
       isListeningRef.current = false;
       setIsListening(false);
+      setStatus('Error');
       setInterimText('');
+      if (event.error === 'not-allowed') {
+        addMessage({ text: "Microphone permission was denied. Please unlock it in your browser address bar.", sender: 'ai' });
+      }
     };
 
     recognition.onend = () => {
       isListeningRef.current = false;
       setIsListening(false);
+      if (status !== 'Error') setStatus('Ready');
       setInterimText('');
     };
 
@@ -286,7 +317,9 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
             </div>
             <div>
               <h2 className="va-title">Meal Map AI</h2>
-              <span className="va-status">Online</span>
+              <span className={`va-status ${status === 'Error' || status === 'Blocked' ? 'text-danger' : 'text-success'}`}>
+                {status === 'Ready' ? 'Online' : status === 'Speaking' ? 'AI is speaking...' : status === 'Listening' ? 'Listening...' : status === 'Blocked' ? 'Microphone Blocked' : 'Ready'}
+              </span>
             </div>
           </div>
           <button className="close-assistant-btn" onClick={onClose}>
@@ -295,6 +328,26 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
         </header>
 
         <div className="chat-area">
+          {showActiveBanner && (
+            <motion.div 
+               initial={{ opacity: 0, y: -10 }} 
+               animate={{ opacity: 1, y: 0 }}
+               style={{ background: 'var(--primary-soft)', padding: '12px 16px', borderRadius: 16, marginBottom: 12, border: '1px dashed var(--primary)'}}
+            >
+               <p style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--primary)'}}>
+                 👋 Tap here to activate the assistant's voice! 
+               </p>
+               <button 
+                onClick={() => {
+                   setShowActiveBanner(false);
+                   speak("Voice activated! I'm ready to help.");
+                }}
+                style={{ marginTop: 8, padding: '6px 12px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: 8, fontSize: '0.75rem', fontWeight: 700}}
+               >
+                 ACTIVATE VOICE
+               </button>
+            </motion.div>
+          )}
           <AnimatePresence mode="popLayout">
             {messages.map((msg, i) => (
               <div key={i} className={`bubble ${msg.sender}`}>
