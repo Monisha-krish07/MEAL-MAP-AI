@@ -11,6 +11,8 @@ import {
 import { processIntent, UserPreferences } from '../utils/nlp';
 import { FoodItem } from '../data/foodData';
 import { motion, AnimatePresence } from 'framer-motion';
+// @ts-ignore
+import { TextToSpeech } from '@capacitor-community/text-to-speech';
 
 interface Props {
   preferences: UserPreferences;
@@ -125,7 +127,25 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
     setMessages(prev => [...prev, msg]);
   }, []);
 
-  const speak = useCallback((text: string, onEnd?: () => void) => {
+  const speak = useCallback(async (text: string, onEnd?: () => void) => {
+    if (isCapacitor()) {
+        try {
+            await TextToSpeech.speak({
+                text: text,
+                lang: 'en-IN',
+                rate: 1.0,
+                pitch: 1.0,
+                volume: 1.0,
+                category: 'ambient',
+            });
+            if (onEnd) onEnd();
+            return;
+        } catch (error) {
+            console.error('Native TTS Error:', error);
+            // Fallback to web if native fails
+        }
+    }
+
     const synth = window.speechSynthesis;
     if (!synth) return;
     
@@ -156,10 +176,11 @@ export const VoiceAssistant: React.FC<Props> = ({ preferences, onAddToCart, onCl
     if (!text.trim()) return;
     addMessage({ text, sender: 'user' });
     const result = processIntent(text, preferences);
-    setTimeout(() => {
-      addMessage({ text: result.message, sender: 'ai', items: result.items });
-      speak(result.message);
-    }, 500);
+    
+    // Removed artificial delay to keep the "user gesture" alive for TTS
+    addMessage({ text: result.message, sender: 'ai', items: result.items });
+    speak(result.message);
+    
     setInputText('');
     setInterimText('');
   }, [addMessage, speak, preferences]);
